@@ -5,6 +5,7 @@ ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 GITHUB_USER="Alireza-Ghadimi"
 MEMT_REMOTE="https://github.com/${GITHUB_USER}/MemT-1.0"
 JIUWEN_REMOTE="https://github.com/${GITHUB_USER}/jiuwenswarm"
+LOGIN_KEYCHAIN="${HOME}/Library/Keychains/login.keychain-db"
 
 if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
   echo "Usage: $0"
@@ -39,6 +40,17 @@ git -C "$ROOT_DIR" rev-parse --verify codex/local-memt-launchers >/dev/null
 git -C "${ROOT_DIR}/memt-1.0" rev-parse --verify main >/dev/null
 
 git config --global credential.helper osxkeychain
+if ! security show-keychain-info "$LOGIN_KEYCHAIN" >/dev/null 2>&1; then
+  echo "The login Keychain is locked. Enter your Mac login password to unlock it."
+  if ! security unlock-keychain "$LOGIN_KEYCHAIN"; then
+    echo "Could not unlock the login Keychain. Open Keychain Access and unlock 'login', then retry." >&2
+    exit 1
+  fi
+fi
+if ! security show-keychain-info "$LOGIN_KEYCHAIN" >/dev/null 2>&1; then
+  echo "The login Keychain is still unavailable. Open Keychain Access and unlock 'login', then retry." >&2
+  exit 1
+fi
 
 echo "Paste your GitHub fine-grained token. It will not appear on screen."
 IFS= read -r -s -p "Token: " github_token < /dev/tty
@@ -49,7 +61,21 @@ if [[ -z "$github_token" ]]; then
 fi
 
 printf 'protocol=https\nhost=github.com\nusername=%s\npassword=%s\n\n' \
-  "$GITHUB_USER" "$github_token" | git credential approve
+  "$GITHUB_USER" "$github_token" | \
+  git -c credential.helper= -c credential.helper=osxkeychain credential approve
+
+saved_password=""
+while IFS= read -r line; do
+  case "$line" in
+    password=*) saved_password="${line#password=}" ;;
+  esac
+done < <(printf 'protocol=https\nhost=github.com\nusername=%s\n\n' "$GITHUB_USER" | \
+  git credential-osxkeychain get 2>/dev/null)
+if [[ "$saved_password" != "$github_token" ]]; then
+  echo "Keychain did not retain the token. Open Keychain Access and unlock 'login', then retry." >&2
+  exit 1
+fi
+unset saved_password
 unset github_token
 
 echo "Pushing MemT main..."
